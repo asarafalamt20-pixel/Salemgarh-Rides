@@ -16,5 +16,5 @@
 </main><footer class="footer">Salemgarh Rides · Salemgarh, Kushinagar · 6:00 AM–6:00 PM IST</footer>
 <script>
 document.querySelectorAll('[data-panel]').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('[data-panel]').forEach(b=>b.classList.toggle('active',b===btn));document.querySelectorAll('main section[id]').forEach(s=>s.hidden=s.id!==btn.dataset.panel)}));
-fetch('http://localhost:4000/api/routes').then(r=>r.ok?r.json():Promise.reject()).then(data=>{const el=document.getElementById('routes');el.innerHTML=data.map(r=>`<div class="route"><span class="pill">Available route</span><p>${r.from} → ${r.to}</p><div class="price">₹${r.fareINR}</div></div>`).join('')}).catch(()=>{});
+fetch('/api/routes').then(r=>r.ok?r.json():Promise.reject()).then(data=>{const el=document.getElementById('routes');el.innerHTML=data.map(r=>`<div class="route"><span class="pill">Available route</span><p>${r.from} → ${r.to}</p><div class="price">₹${r.fareINR}</div></div>`).join('')}).catch(()=>{document.getElementById('routes').insertAdjacentHTML('beforeend','<p class="muted">Route fares could not be loaded. Please refresh later.</p>');});
 </script></body></html>
