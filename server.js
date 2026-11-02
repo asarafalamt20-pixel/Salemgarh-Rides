@@ -1,40 +1,30 @@
 import express from 'express';
+import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-
-const app = express();
-const PORT = Number(process.env.PORT || 4000);
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-app.disable('x-powered-by');
-app.use(express.json({ limit: '100kb' }));
-
-// Initial configured routes. These are display-only starter fares; no ride is booked.
-const routes = [
-  { id: 'salemgarh-tamkuhi-raj', from: 'Salemgarh', to: 'Tamkuhi Raj', fareINR: 50, enabled: true },
-  { id: 'salemgarh-tamkuhi-road', from: 'Salemgarh', to: 'Tamkuhi Road', fareINR: 80, enabled: true },
-  { id: 'salemgarh-fazilnagar', from: 'Salemgarh', to: 'Fazilnagar', fareINR: 80, enabled: true }
-];
-
-app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, app: 'Salemgarh Rides', mode: 'starter-scaffold' });
-});
-
-app.get('/api/routes', (_req, res) => {
-  res.json(routes.filter((route) => route.enabled));
-});
-
-// Serve the customer/rider/admin starter page from the repository root.
-app.use(express.static(__dirname, { index: false, extensions: ['html'] }));
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
-
-app.use((_req, res) => {
-  res.status(404).json({ error: 'Not found' });
-});
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Salemgarh Rides listening on port ${PORT}`);
-});
+const dir=path.dirname(fileURLToPath(import.meta.url)), app=express();
+app.use(express.json()); app.use(express.static(path.join(dir,'public')));
+const dbfile=path.join(dir,'data','db.json');
+const seed={routes:[{id:'r1',from:'Salemgarh',to:'Tamkuhi Raj',fare:50,enabled:true},{id:'r2',from:'Salemgarh',to:'Tamkuhi Road',fare:80,enabled:true},{id:'r3',from:'Salemgarh',to:'Fazilnagar',fare:80,enabled:true}],riders:[],bookings:[],complaints:[],payouts:[]};
+let db; try{db=JSON.parse(fs.readFileSync(dbfile));}catch{db=seed;}
+const save=()=>{fs.mkdirSync(path.dirname(dbfile),{recursive:true});fs.writeFileSync(dbfile,JSON.stringify(db,null,2));};
+const id=p=>p+'_'+crypto.randomBytes(5).toString('hex');
+const admin=(q,s,n)=>{if(!process.env.ADMIN_PASSWORD||q.headers.authorization!=='Bearer '+process.env.ADMIN_PASSWORD)return s.status(401).json({error:'Admin password missing or incorrect'});n();};
+app.get('/api/health',(q,s)=>s.json({ok:true,app:'Salemgarh Rides',mode:'functional-prototype'}));
+app.get('/api/routes',(q,s)=>s.json(db.routes.filter(x=>x.enabled)));
+app.post('/api/bookings',(q,s)=>{let x=q.body,r=db.routes.find(y=>y.id===x.routeId&&y.enabled);if(!x.customerName||!x.phone||!x.pickup||!x.vehicleType||!r)return s.status(400).json({error:'Complete all booking fields'});let b={id:id('SR'),...x,from:r.from,to:r.to,fare:r.fare,status:'Requested',riderId:null,paymentStatus:'Unpaid',createdAt:new Date().toISOString()};db.bookings.unshift(b);save();s.status(201).json(b);});
+app.get('/api/bookings',(q,s)=>s.json(db.bookings.filter(x=>!q.query.phone||x.phone===q.query.phone)));
+app.post('/api/riders',(q,s)=>{let x=q.body;if(!x.name||!x.phone||!x.vehicleType||!x.vehicleNumber)return s.status(400).json({error:'Complete all rider fields'});if(db.riders.some(r=>r.phone===x.phone))return s.status(409).json({error:'Phone already registered'});let r={id:id('R'),...x,approved:false,online:false,earnings:0};db.riders.push(r);save();s.status(201).json(r);});
+app.get('/api/rider/:phone',(q,s)=>{let r=db.riders.find(x=>x.phone===q.params.phone);r?s.json(r):s.status(404).json({error:'Rider not found'});});
+app.post('/api/rider/:id/online',(q,s)=>{let r=db.riders.find(x=>x.id===q.params.id);if(!r)return s.status(404).json({error:'Rider not found'});if(!r.approved)return s.status(403).json({error:'Admin approval required'});r.online=!!q.body.online;save();s.json(r);});
+app.get('/api/rider/:id/jobs',(q,s)=>{let r=db.riders.find(x=>x.id===q.params.id);if(!r)return s.status(404).json({error:'Rider not found'});s.json(db.bookings.filter(b=>b.status==='Requested'||b.riderId===r.id));});
+app.post('/api/rider/:id/accept/:bid',(q,s)=>{let r=db.riders.find(x=>x.id===q.params.id),b=db.bookings.find(x=>x.id===q.params.bid);if(!r||!b)return s.status(404).json({error:'Not found'});if(!r.approved||!r.online)return s.status(403).json({error:'Approved online rider required'});if(b.status!=='Requested'||b.riderId)return s.status(409).json({error:'Already assigned'});if(r.vehicleType!==b.vehicleType&&b.vehicleType!=='Other')return s.status(409).json({error:'Vehicle mismatch'});b.riderId=r.id;b.status='Accepted';save();s.json(b);});
+app.post('/api/rider/:id/next/:bid',(q,s)=>{let r=db.riders.find(x=>x.id===q.params.id),b=db.bookings.find(x=>x.id===q.params.bid);if(!r||!b||b.riderId!==r.id)return s.status(404).json({error:'Assigned ride not found'});let n={Accepted:'Rider on the Way','Rider on the Way':'Arrived',Arrived:'Ride Started','Ride Started':'Completed'}[b.status];if(!n)return s.status(409).json({error:'No next status'});b.status=n;if(n==='Completed')r.earnings+=Math.round(b.fare*.7);save();s.json(b);});
+app.get('/api/admin/data',admin,(q,s)=>s.json({bookings:db.bookings,riders:db.riders,routes:db.routes,complaints:db.complaints,payouts:db.payouts}));
+app.post('/api/admin/riders/:id/approve',admin,(q,s)=>{let r=db.riders.find(x=>x.id===q.params.id);if(!r)return s.status(404).json({error:'Rider not found'});r.approved=!!q.body.approved;if(!r.approved)r.online=false;save();s.json(r);});
+app.patch('/api/admin/routes/:id',admin,(q,s)=>{let r=db.routes.find(x=>x.id===q.params.id);if(!r)return s.status(404).json({error:'Route not found'});if(Number.isFinite(Number(q.body.fare))&&Number(q.body.fare)>=0)r.fare=Number(q.body.fare);save();s.json(r);});
+app.patch('/api/admin/bookings/:id',admin,(q,s)=>{let b=db.bookings.find(x=>x.id===q.params.id);if(!b)return s.status(404).json({error:'Booking not found'});b.status=q.body.status;save();s.json(b);});
+app.post('/api/complaints',(q,s)=>{let x=q.body;if(!db.bookings.some(b=>b.id===x.bookingId&&b.phone===x.phone))return s.status(404).json({error:'Booking not found'});let c={id:id('C'),...x,status:'Open'};db.complaints.unshift(c);save();s.status(201).json(c);});
+app.get('*',(q,s)=>s.sendFile(path.join(dir,'public','index.html')));
+app.listen(process.env.PORT||4000);
